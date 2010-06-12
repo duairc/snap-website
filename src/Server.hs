@@ -1,8 +1,15 @@
-{-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
+module Server
+    ( server
+    , AppConfig(..)
+    , emptyServerConfig
+    , commandLineConfig
 
-module Server(templateServer,server,AppConfig(..),emptyServerConfig) where
+    , templateServer
+    , templateServe
+    , render
+    , addSplices
+    ) where
 import           Control.Applicative
 import           Control.Concurrent
 import           Control.Exception (SomeException)
@@ -13,9 +20,11 @@ import qualified Data.Text as T
 import           Prelude hiding (catch)
 import           Snap.Http.Server
 import           Snap.Types
+import           Snap.Util.FileServe
 import           Snap.Util.GZip
 import           System
 import           System.Posix.Env
+import           Text.Templating.Heist
 import qualified Text.XHtmlCombinators.Escape as XH
 
 import           Templates
@@ -53,6 +62,13 @@ emptyServerConfig = AppConfig
         writeBS "\n</pre></body></html>"
     }
 
+commandLineConfig :: IO AppConfig
+commandLineConfig = do
+    args <- getArgs
+    return $ case args of
+         []        -> emptyServerConfig
+         (port':_) -> emptyServerConfig { port = read port' }
+
 server :: AppConfig -> Snap () -> IO ()
 server config handler = do
     putStrLn $ "Listening on " ++ (B.unpack $ interface config)
@@ -74,35 +90,35 @@ server config handler = do
 
 
 templateServer :: FilePath
-               -> Splices Snap
+               -> [(ByteString, Splice Snap)]
                -> AppConfig
-               -> ((ByteString -> Snap ()) -> Snap ())
+               -> (TemplateState Snap -> Snap ())
                -> IO ()
 templateServer dir' splices config f = do
-    eTemplates <- newTemplates dir' splices
-    templates <- fromRight eTemplates
-    server config $ (snapTemplateReloader $ reloadTemplates templates) <|>
-                    (f $ snapTemplateRenderer $ renderTemplates templates)
+    eT <- newTemplates dir' splices
+    t <- fromRight eT
+    server config $ reloadHandler t <|> (f =<< getTs t)
   where
-    fromRight e = either (\s -> putStrLn s >> exitFailure) return e
+    fromRight = either (\s -> putStrLn s >> exitFailure) return
 
 
-snapTemplateRenderer :: (ByteString -> Snap (Maybe ByteString))
-                     -> ByteString
-                     -> Snap ()
-snapTemplateRenderer render template = do
-    bytes <- render template
+reloadHandler :: Templates Snap -> Snap ()
+reloadHandler t = path "admin/reload" $ do
+    e <- refresh t
+    modifyResponse $ setContentType "text/plain; charset=utf-8"
+    writeBS . B.pack $ either id (const "Templates loaded successfully.") e
+
+
+render :: TemplateState Snap -> ByteString -> Snap ()
+render ts template = do
+    bytes <- renderTemplate ts template
     flip (maybe pass) bytes $ \x -> do
         modifyResponse $ setContentType "text/html; charset=utf-8"
         writeBS x
 
 
-snapTemplateReloader :: Snap (Either String ()) -> Snap ()
-snapTemplateReloader reload = path "admin/reload" $ do
-    e <- reload
-    modifyResponse $ setContentType "text/plain; charset=utf-8"
-    writeBS . B.pack $ either (++ "Keeping old templates")
-                              (const "Templates loaded successfully.") e
+templateServe :: TemplateState Snap -> Snap ()
+templateServe ts = render ts . B.pack =<< getSafePath
 
 
 setUTF8Locale :: String -> IO ()
