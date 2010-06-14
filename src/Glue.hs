@@ -15,7 +15,6 @@ import qualified Data.ByteString.Char8 as B
 import           Prelude hiding (catch)
 import           Snap.Types hiding (dir)
 import           Snap.Util.FileServe
-import           System.Directory
 import           Text.Templating.Heist
 
 import           TemplateDirectory
