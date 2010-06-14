@@ -1,49 +1,43 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Server
-    ( server
-    , AppConfig(..)
+    ( ServerConfig(..)
     , emptyServerConfig
     , commandLineConfig
-
-    , templateServer
-    , templateServe
-    , render
-    , addSplices
+    , server
+    , quickServer
     ) where
-import           Control.Applicative
+import qualified Data.ByteString.Char8 as B
+import           Data.ByteString.Char8 (ByteString)
+import           Data.Char
 import           Control.Concurrent
 import           Control.Exception (SomeException)
 import           Control.Monad.CatchIO
-import           Data.ByteString.Char8 (ByteString)
-import qualified Data.ByteString.Char8 as B
 import qualified Data.Text as T
 import           Prelude hiding (catch)
 import           Snap.Http.Server
 import           Snap.Types
-import           Snap.Util.FileServe
 import           Snap.Util.GZip
-import           System
+import           System hiding (getEnv)
 import           System.Posix.Env
-import           Text.Templating.Heist
 import qualified Text.XHtmlCombinators.Escape as XH
 
-import           Templates
 
-data AppConfig = AppConfig
-    { locale             :: String
-    , interface          :: ByteString
-    , port               :: Int
-    , hostname           :: ByteString
-    , accessLog          :: Maybe FilePath
-    , errorLog           :: Maybe FilePath
-    , compression        :: Bool
-    , error500Handler    :: SomeException -> Snap ()
+data ServerConfig = ServerConfig
+    { locale          :: String
+    , interface       :: ByteString
+    , port            :: Int
+    , hostname        :: ByteString
+    , accessLog       :: Maybe FilePath
+    , errorLog        :: Maybe FilePath
+    , compression     :: Bool
+    , error500Handler :: SomeException -> Snap ()
     }
 
-emptyServerConfig :: AppConfig
-emptyServerConfig = AppConfig
+
+emptyServerConfig :: ServerConfig
+emptyServerConfig = ServerConfig
     { locale          = "en_US"
-    , interface       = "*"
+    , interface       = "0.0.0.0"
     , port            = 8000
     , hostname        = "myserver"
     , accessLog       = Just "access.log"
@@ -62,14 +56,19 @@ emptyServerConfig = AppConfig
         writeBS "\n</pre></body></html>"
     }
 
-commandLineConfig :: IO AppConfig
+
+commandLineConfig :: IO ServerConfig
 commandLineConfig = do
     args <- getArgs
-    return $ case args of
+    let conf = case args of
          []        -> emptyServerConfig
          (port':_) -> emptyServerConfig { port = read port' }
+    locale' <- getEnv "LANG"
+    return $ case locale' of
+        Nothing -> conf
+        Just l  -> conf {locale = takeWhile (\c -> isAlpha c || c == '_') l}
 
-server :: AppConfig -> Snap () -> IO ()
+server :: ServerConfig -> Snap () -> IO ()
 server config handler = do
     putStrLn $ "Listening on " ++ (B.unpack $ interface config)
              ++ ":" ++ show (port config)
@@ -89,36 +88,8 @@ server config handler = do
     compress = if compression config then withCompression else id
 
 
-templateServer :: FilePath
-               -> [(ByteString, Splice Snap)]
-               -> AppConfig
-               -> (TemplateState Snap -> Snap ())
-               -> IO ()
-templateServer dir' splices config f = do
-    eT <- newTemplates dir' splices
-    t <- fromRight eT
-    server config $ reloadHandler t <|> (f =<< getTs t)
-  where
-    fromRight = either (\s -> putStrLn s >> exitFailure) return
-
-
-reloadHandler :: Templates Snap -> Snap ()
-reloadHandler t = path "admin/reload" $ do
-    e <- refresh t
-    modifyResponse $ setContentType "text/plain; charset=utf-8"
-    writeBS . B.pack $ either id (const "Templates loaded successfully.") e
-
-
-render :: TemplateState Snap -> ByteString -> Snap ()
-render ts template = do
-    bytes <- renderTemplate ts template
-    flip (maybe pass) bytes $ \x -> do
-        modifyResponse $ setContentType "text/html; charset=utf-8"
-        writeBS x
-
-
-templateServe :: TemplateState Snap -> Snap ()
-templateServe ts = render ts . B.pack =<< getSafePath
+quickServer :: Snap () -> IO ()
+quickServer = (commandLineConfig >>=) . flip server
 
 
 setUTF8Locale :: String -> IO ()

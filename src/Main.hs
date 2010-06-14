@@ -4,19 +4,19 @@ module Main where
 import qualified Data.ByteString.Char8 as B
 import           Control.Applicative
 import           Control.Monad
-import           Prelude hiding (catch)
 import           Snap.Http.Server
 import           Snap.Types
 import           Snap.Util.FileServe
 import           Text.Templating.Heist
 import           Text.XML.Expat.Tree hiding (Node)
 
-import Server
+import           Glue
+import           Server
 
 apiHandler :: TemplateState Snap -> Snap ()
 apiHandler ts = do
     doc <- liftM rqPathInfo getRequest
-    render (addSplices (splices doc) ts) "docs/api"
+    render (bindSplices (splices doc) ts) "docs/api"
   where
     href doc     = B.concat ["/docs/latest/", doc, "/index.html"]
     docframe doc = return [mkElement "frame" [ ("id", "docframe")
@@ -27,10 +27,9 @@ apiHandler ts = do
 
 main :: IO ()
 main = do
-    config <- commandLineConfig
-    templateServer "templates" splices config $ \ts ->
+    td <- newTemplateDirectory' "templates" (withSplices splices)
+    quickServer $ templateHandler td defaultReloadHandler $ \ts ->
           route [("docs/api", apiHandler ts)]
-      <|> ifTop (render ts "index")
       <|> templateServe ts
       <|> fileServe "static"
   where
